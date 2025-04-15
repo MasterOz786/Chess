@@ -1,3 +1,7 @@
+import tkinter as tk
+from tkinter import messagebox
+import os
+from PIL import Image, ImageTk
 import copy
 import random
 
@@ -25,18 +29,7 @@ class ChessBoard:
         self.game_over = False
         self.winner = None
 
-    def print_board(self):
-        """Display the chessboard in the console."""
-        print("\n   a b c d e f g h")
-        print("  ----------------")
-        for i in range(8):
-            print(f"{8-i} |", end=" ")
-            for j in range(8):
-                print(self.board[i][j], end=" ")
-            print(f"| {8-i}")
-        print("  ----------------")
-        print("   a b c d e f g h\n")
-
+    # All other methods remain the same...
     def make_move(self, start, end):
         """Make a move from start to end position."""
         start_row, start_col = start
@@ -458,41 +451,239 @@ def coord_to_pos(coord):
     row = 8 - int(coord[1])
     return (row, col)
 
-def main():
-    """Main game loop."""
-    board = ChessBoard()
-    print("Welcome to Chess!")
-    print("Enter moves in format: e2e4 (start square to end square)")
-    print("Enter 'quit' to exit")
-    
-    while not board.game_over:
-        board.print_board()
-        if board.white_to_move:
-            move = input("Your move: ")
-            if move.lower() == 'quit':
-                break
+class ChessGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Chess Game")
+        self.board = ChessBoard()
+        self.selected_square = None
+        self.piece_images = {}
+        self.square_size = 64  # Standard square size
+        self.setup_gui()
+        self.load_pieces()
+        self.update_board()
+
+    def setup_gui(self):
+        """Set up the GUI components."""
+        # Main frame
+        self.main_frame = tk.Frame(self.root)
+        self.main_frame.pack(padx=10, pady=10)
+
+        # Chess board frame
+        self.board_frame = tk.Frame(self.main_frame)
+        self.board_frame.pack(side=tk.LEFT)
+
+        # Create squares with proper dimensions
+        self.squares = [[None for _ in range(8)] for _ in range(8)]
+        for row in range(8):
+            for col in range(8):
+                color = "#F0D9B5" if (row + col) % 2 == 0 else "#B58863"
+                # Create a frame for each square to better control dimensions
+                square_frame = tk.Frame(self.board_frame, 
+                                    width=self.square_size, 
+                                    height=self.square_size,
+                                    bg=color,
+                                    borderwidth=1,
+                                    relief='solid')
+                square_frame.grid(row=row, column=col)
+                # Force the frame to keep its size
+                square_frame.grid_propagate(False)
+                
+                # Create a label inside the frame for the piece
+                square = tk.Label(square_frame, bg=color)
+                square.place(relx=0.5, rely=0.5, anchor='center')
+                square_frame.bind('<Button-1>', lambda e, r=row, c=col: self.square_clicked(r, c))
+                
+                self.squares[row][col] = square
+                self.squares[row][col].frame = square_frame  # Store reference to parent frame
+
+        # Rank and file labels
+        # Add file labels (a-h)
+        for col in range(8):
+            label = tk.Label(self.board_frame, text=chr(97 + col), font=('Arial', 10))
+            label.grid(row=8, column=col, sticky='n')
+        
+        # Add rank labels (1-8)
+        for row in range(8):
+            label = tk.Label(self.board_frame, text=str(8 - row), font=('Arial', 10))
+            label.grid(row=row, column=8, sticky='w')
+
+        # Info frame
+        self.info_frame = tk.Frame(self.main_frame)
+        self.info_frame.pack(side=tk.LEFT, padx=20)
+
+        # Turn label
+        self.turn_label = tk.Label(self.info_frame, text="White's turn", font=('Arial', 14))
+        self.turn_label.pack(pady=10)
+
+        # Move history
+        self.history_frame = tk.Frame(self.info_frame)
+        self.history_frame.pack(pady=10)
+        
+        tk.Label(self.history_frame, text="Move History:", font=('Arial', 12)).pack()
+        self.history_text = tk.Text(self.history_frame, width=20, height=15)
+        self.history_text.pack()
+
+    def load_pieces(self):
+        """Load chess piece images."""
+        piece_chars = {'p': 'Pawn', 'r': 'Rook', 'n': 'Knight',  
+                      'b': 'Bishop', 'q': 'Queen', 'k': 'King'}
+        
+        # Create 'pieces' directory if it doesn't exist
+        if not os.path.exists('pieces'):
+            os.makedirs('pieces')
+            print("Please add chess piece images to the 'pieces' directory.")
+            print("Required files: wPawn.png, wRook.png, etc.") 
+            
+            # Use default values if no images are available
+            for piece_char in piece_chars.keys():
+                self.piece_images[piece_char.upper()] = None
+                self.piece_images[piece_char] = None
+            return
+
+        # Calculate piece size (slightly smaller than square to have margin)
+        piece_size = int(self.square_size * 0.8)
+
+        for piece_char, piece_name in piece_chars.items():
+            # Load white pieces
             try:
-                start = coord_to_pos(move[:2])
-                end = coord_to_pos(move[2:])
-                if (start, end) in board.get_valid_moves():
-                    board.make_move(start, end)
-                else:
-                    print("Invalid move! Try again.")
-                    continue
+                image = Image.open(f'pieces/w{piece_name}.png')
+                image = image.resize((piece_size, piece_size))
+                self.piece_images[piece_char.upper()] = ImageTk.PhotoImage(image)
             except:
-                print("Invalid input format! Use e2e4 format.")
-                continue
+                print(f"Missing piece image: w{piece_name}.png")
+                # Create text-based fallback
+                self.piece_images[piece_char.upper()] = piece_char.upper()
+
+            # Load black pieces
+            try:
+                image = Image.open(f'pieces/b{piece_name}.png')
+                image = image.resize((piece_size, piece_size))
+                self.piece_images[piece_char] = ImageTk.PhotoImage(image)
+            except:
+                print(f"Missing piece image: b{piece_name}.png")
+                # Create text-based fallback
+                self.piece_images[piece_char] = piece_char
+
+    def update_board(self):
+        """Update the GUI board with current game state."""
+        for row in range(8):
+            for col in range(8):
+                piece = self.board.board[row][col]
+                square = self.squares[row][col]
+                
+                # Clear existing image
+                square.configure(image='', text='')
+                
+                # Add piece image if square is not empty
+                if piece != '.':
+                    if piece in self.piece_images:
+                        if isinstance(self.piece_images[piece], str):
+                            # If no image was loaded, use text representation
+                            square.configure(text=self.piece_images[piece], font=('Arial', 24))
+                        else:
+                            square.configure(image=self.piece_images[piece])
+                            square.image = self.piece_images[piece]
+
+        # Update turn label
+        self.turn_label.config(text="White's turn" if self.board.white_to_move else "Black's turn")
+
+    def square_clicked(self, row, col):
+        """Handle square click events."""
+        if not self.board.white_to_move or self.board.game_over:
+            return
+
+        if self.selected_square is None:
+            piece = self.board.board[row][col]
+            if piece.isupper():  # White piece
+                self.selected_square = (row, col)
+                self.highlight_square(row, col)
+                self.highlight_valid_moves(row, col)
         else:
-            print("Computer thinking...")
-            _, best_move = minimax(board, 3, float('-inf'), float('inf'), False)
+            start_row, start_col = self.selected_square
+            move = ((start_row, start_col), (row, col))
+            
+            valid_moves = self.board.get_valid_moves()
+            if move in valid_moves:
+                self.make_move(move)
+                self.clear_highlights()
+                
+                # Computer's turn
+                self.root.after(500, self.make_computer_move)
+            
+            self.selected_square = None
+            self.clear_highlights()
+
+    def highlight_square(self, row, col):
+        """Highlight selected square."""
+        self.squares[row][col].frame.config(bg='#646E40')
+        self.squares[row][col].config(bg='#646E40')
+
+    def highlight_valid_moves(self, row, col):
+        """Highlight valid moves for selected piece."""
+        valid_moves = self.board.get_valid_moves()
+        for start, end in valid_moves:
+            if start == (row, col):
+                end_row, end_col = end
+                self.squares[end_row][end_col].frame.config(bg='#779952')
+                self.squares[end_row][end_col].config(bg='#779952')
+
+    def clear_highlights(self):
+        """Clear all highlights from the board."""
+        for row in range(8):
+            for col in range(8):
+                color = "#F0D9B5" if (row + col) % 2 == 0 else "#B58863"
+                self.squares[row][col].frame.config(bg=color)
+                self.squares[row][col].frame.config(bg=color)
+                self.squares[row][col].config(bg=color)
+
+    def make_move(self, move):
+        """Make a move and update the game state."""
+        start, end = move
+        self.board.make_move(start, end)
+        self.update_board()
+        self.add_move_to_history(start, end)
+        self.check_game_end()
+
+    def make_computer_move(self):
+        """Make computer's move."""
+        if not self.board.game_over:
+            _, best_move = minimax(self.board, 3, float('-inf'), float('inf'), False)
             if best_move:
-                start, end = best_move
-                print(f"Computer moves: {pos_to_coord(start)}{pos_to_coord(end)}")
-                board.make_move(start, end)
-    
-    board.print_board()
-    if board.winner:
-        print(f"Game Over! {board.winner} wins!" if board.winner != 'Draw' else "Game Over! It's a draw!")
+                self.make_move(best_move)
+
+    def add_move_to_history(self, start, end):
+        """Add move to history display."""
+        piece = self.board.move_log[-1][2]  # Get the piece that was moved
+        captured = self.board.move_log[-1][3]  # Get captured piece, if any
+        
+        # Format move nicely
+        move_text = f"{piece} {pos_to_coord(start)}"
+        if captured != '.':
+            move_text += f"x{captured} {pos_to_coord(end)}"
+        else:
+            move_text += f"-{pos_to_coord(end)}"
+            
+        # Add move number for white moves
+        if len(self.board.move_log) % 2 == 1:  # White's move (1-indexed)
+            move_number = (len(self.board.move_log) + 1) // 2
+            move_text = f"{move_number}. {move_text}"
+        
+        self.history_text.insert(tk.END, move_text + "\n")
+        self.history_text.see(tk.END)
+
+    def check_game_end(self):
+        """Check if the game has ended and show appropriate message."""
+        if self.board.game_over:
+            if self.board.winner == 'Draw':
+                messagebox.showinfo("Game Over", "It's a draw!")
+            else:
+                messagebox.showinfo("Game Over", f"{self.board.winner} wins!")
+
+def main():
+    root = tk.Tk()
+    chess_gui = ChessGUI(root)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
