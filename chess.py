@@ -4,6 +4,8 @@ import os
 from PIL import Image, ImageTk
 import copy
 import random
+import threading
+from queue import Queue, Empty
 
 # Chess board representation
 class ChessBoard:
@@ -29,7 +31,6 @@ class ChessBoard:
         self.game_over = False
         self.winner = None
 
-    # All other methods remain the same...
     def make_move(self, start, end):
         """Make a move from start to end position."""
         start_row, start_col = start
@@ -158,9 +159,9 @@ class ChessBoard:
         
         # Normalize direction
         if d_row != 0:
-            d_row = d_row // abs(d_row) if d_row != 0 else 0
+            d_row = d_row // abs(d_row)
         if d_col != 0:
-            d_col = d_col // abs(d_col) if d_col != 0 else 0
+            d_col = d_col // abs(d_col)
             
         # Get valid squares along pin direction (including attacker position)
         valid_squares = [(attacker_row, attacker_col)]
@@ -286,7 +287,7 @@ class ChessBoard:
         """Get valid moves when in check."""
         moves = []
         king_pos = self.white_king_pos if self.white_to_move else self.black_king_pos
-        check_row, check_col, d_row, d_col = self.checks[0]  # Correct unpacking
+        check_row, check_col, d_row, d_col = self.checks[0]
         
         # Generate king moves as (king_pos, end) tuples
         king_moves = self.get_king_moves(king_pos)
@@ -300,11 +301,11 @@ class ChessBoard:
         ]
         blocking_squares.append((check_row, check_col))
         
-        # Collect valid moves from other pieces
         for row in range(8):
             for col in range(8):
                 piece = self.board[row][col]
-                if (self.white_to_move and piece.isupper()) or (not self.white_to_move and piece.islower()):
+                if (self.white_to_move and piece.isupper()) or \
+                   (not self.white_to_move and piece.islower()):
                     piece_moves = self.get_piece_moves((row, col), piece)
                     for move in piece_moves:
                         _, end_pos = move
@@ -445,12 +446,6 @@ def pos_to_coord(pos):
     row, col = pos
     return f"{chr(97 + col)}{8 - row}"
 
-def coord_to_pos(coord):
-    """Convert chess coordinate to board position."""
-    col = ord(coord[0].lower()) - 97
-    row = 8 - int(coord[1])
-    return (row, col)
-
 class ChessGUI:
     def __init__(self, root):
         self.root = root
@@ -458,14 +453,14 @@ class ChessGUI:
         self.board = ChessBoard()
         self.selected_square = None
         self.piece_images = {}
-        self.square_size = 64  # Standard square size
+        self.square_size = 64
+        self.move_queue = Queue()
         self.setup_gui()
         self.load_pieces()
         self.update_board()
 
     def setup_gui(self):
         """Set up the GUI components."""
-        # Main frame
         self.main_frame = tk.Frame(self.root)
         self.main_frame.pack(padx=10, pady=10)
 
@@ -473,37 +468,32 @@ class ChessGUI:
         self.board_frame = tk.Frame(self.main_frame)
         self.board_frame.pack(side=tk.LEFT)
 
-        # Create squares with proper dimensions
+        # Create squares
         self.squares = [[None for _ in range(8)] for _ in range(8)]
         for row in range(8):
             for col in range(8):
                 color = "#F0D9B5" if (row + col) % 2 == 0 else "#B58863"
-                # Create a frame for each square to better control dimensions
                 square_frame = tk.Frame(self.board_frame, 
-                                    width=self.square_size, 
-                                    height=self.square_size,
-                                    bg=color,
-                                    borderwidth=1,
-                                    relief='solid')
+                                      width=self.square_size, 
+                                      height=self.square_size,
+                                      bg=color,
+                                      borderwidth=1,
+                                      relief='solid')
                 square_frame.grid(row=row, column=col)
-                # Force the frame to keep its size
                 square_frame.grid_propagate(False)
                 
-                # Create a label inside the frame for the piece
                 square = tk.Label(square_frame, bg=color)
                 square.place(relx=0.5, rely=0.5, anchor='center')
                 square_frame.bind('<Button-1>', lambda e, r=row, c=col: self.square_clicked(r, c))
                 
                 self.squares[row][col] = square
-                self.squares[row][col].frame = square_frame  # Store reference to parent frame
+                self.squares[row][col].frame = square_frame
 
         # Rank and file labels
-        # Add file labels (a-h)
         for col in range(8):
             label = tk.Label(self.board_frame, text=chr(97 + col), font=('Arial', 10))
             label.grid(row=8, column=col, sticky='n')
         
-        # Add rank labels (1-8)
         for row in range(8):
             label = tk.Label(self.board_frame, text=str(8 - row), font=('Arial', 10))
             label.grid(row=row, column=8, sticky='w')
@@ -512,9 +502,12 @@ class ChessGUI:
         self.info_frame = tk.Frame(self.main_frame)
         self.info_frame.pack(side=tk.LEFT, padx=20)
 
-        # Turn label
+        # Turn and status labels
         self.turn_label = tk.Label(self.info_frame, text="White's turn", font=('Arial', 14))
         self.turn_label.pack(pady=10)
+
+        self.status_label = tk.Label(self.info_frame, text="", font=('Arial', 12))
+        self.status_label.pack(pady=5)
 
         # Move history
         self.history_frame = tk.Frame(self.info_frame)
@@ -526,67 +519,50 @@ class ChessGUI:
 
     def load_pieces(self):
         """Load chess piece images."""
-        piece_chars = {'p': 'Pawn', 'r': 'Rook', 'n': 'Knight',  
+        piece_chars = {'p': 'Pawn', 'r': 'Rook', 'n': 'Knight', 
                       'b': 'Bishop', 'q': 'Queen', 'k': 'King'}
         
-        # Create 'pieces' directory if it doesn't exist
         if not os.path.exists('pieces'):
             os.makedirs('pieces')
-            print("Please add chess piece images to the 'pieces' directory.")
-            print("Required files: wPawn.png, wRook.png, etc.") 
+            print("Created 'pieces' directory. Add chess piece images for better UI.")
             
-            # Use default values if no images are available
-            for piece_char in piece_chars.keys():
-                self.piece_images[piece_char.upper()] = None
-                self.piece_images[piece_char] = None
-            return
-
-        # Calculate piece size (slightly smaller than square to have margin)
         piece_size = int(self.square_size * 0.8)
 
         for piece_char, piece_name in piece_chars.items():
-            # Load white pieces
             try:
                 image = Image.open(f'pieces/w{piece_name}.png')
                 image = image.resize((piece_size, piece_size))
                 self.piece_images[piece_char.upper()] = ImageTk.PhotoImage(image)
             except:
-                print(f"Missing piece image: w{piece_name}.png")
-                # Create text-based fallback
                 self.piece_images[piece_char.upper()] = piece_char.upper()
 
-            # Load black pieces
             try:
                 image = Image.open(f'pieces/b{piece_name}.png')
                 image = image.resize((piece_size, piece_size))
                 self.piece_images[piece_char] = ImageTk.PhotoImage(image)
             except:
-                print(f"Missing piece image: b{piece_name}.png")
-                # Create text-based fallback
                 self.piece_images[piece_char] = piece_char
 
-    def update_board(self):
+    def update_board(self, changed_squares=None):
         """Update the GUI board with current game state."""
-        for row in range(8):
-            for col in range(8):
-                piece = self.board.board[row][col]
-                square = self.squares[row][col]
-                
-                # Clear existing image
-                square.configure(image='', text='')
-                
-                # Add piece image if square is not empty
-                if piece != '.':
-                    if piece in self.piece_images:
-                        if isinstance(self.piece_images[piece], str):
-                            # If no image was loaded, use text representation
-                            square.configure(text=self.piece_images[piece], font=('Arial', 24))
-                        else:
-                            square.configure(image=self.piece_images[piece])
-                            square.image = self.piece_images[piece]
-
-        # Update turn label
+        if changed_squares is None:
+            changed_squares = [(r, c) for r in range(8) for c in range(8)]
+        
+        for row, col in changed_squares:
+            piece = self.board.board[row][col]
+            square = self.squares[row][col]
+            
+            square.configure(image='', text='')
+            
+            if piece != '.' and piece in self.piece_images:
+                if isinstance(self.piece_images[piece], str):
+                    square.configure(text=self.piece_images[piece], font=('Arial', 24))
+                else:
+                    square.configure(image=self.piece_images[piece])
+                    square.image = self.piece_images[piece]
+        
         self.turn_label.config(text="White's turn" if self.board.white_to_move else "Black's turn")
+        self.root.update_idletasks()
 
     def square_clicked(self, row, col):
         """Handle square click events."""
@@ -595,7 +571,7 @@ class ChessGUI:
 
         if self.selected_square is None:
             piece = self.board.board[row][col]
-            if piece.isupper():  # White piece
+            if piece.isupper():
                 self.selected_square = (row, col)
                 self.highlight_square(row, col)
                 self.highlight_valid_moves(row, col)
@@ -607,9 +583,7 @@ class ChessGUI:
             if move in valid_moves:
                 self.make_move(move)
                 self.clear_highlights()
-                
-                # Computer's turn
-                self.root.after(500, self.make_computer_move)
+                self.make_computer_move()
             
             self.selected_square = None
             self.clear_highlights()
@@ -634,38 +608,50 @@ class ChessGUI:
             for col in range(8):
                 color = "#F0D9B5" if (row + col) % 2 == 0 else "#B58863"
                 self.squares[row][col].frame.config(bg=color)
-                self.squares[row][col].frame.config(bg=color)
                 self.squares[row][col].config(bg=color)
 
     def make_move(self, move):
         """Make a move and update the game state."""
         start, end = move
         self.board.make_move(start, end)
-        self.update_board()
+        self.update_board([start, end])
         self.add_move_to_history(start, end)
         self.check_game_end()
 
-    def make_computer_move(self):
-        """Make computer's move."""
-        if not self.board.game_over:
-            _, best_move = minimax(self.board, 3, float('-inf'), float('inf'), False)
+    def compute_best_move(self):
+        """Compute AI's move in a separate thread."""
+        _, best_move = minimax(self.board, 3, float('-inf'), float('inf'), False)
+        self.move_queue.put(best_move)
+
+    def check_move_queue(self):
+        """Check if AI move is ready."""
+        try:
+            best_move = self.move_queue.get_nowait()
+            self.status_label.config(text="")
             if best_move:
                 self.make_move(best_move)
+        except Empty:
+            self.root.after(100, self.check_move_queue)
+
+    def make_computer_move(self):
+        """Start AI move computation in a separate thread."""
+        if not self.board.game_over:
+            self.status_label.config(text="AI is thinking...")
+            threading.Thread(target=self.compute_best_move, daemon=True).start()
+            self.root.after(100, self.check_move_queue)
 
     def add_move_to_history(self, start, end):
         """Add move to history display."""
-        piece = self.board.move_log[-1][2]  # Get the piece that was moved
-        captured = self.board.move_log[-1][3]  # Get captured piece, if any
+        piece = self.board.move_log[-1][2]
+        captured = self.board.move_log[-1][3]
         
-        # Format move nicely
         move_text = f"{piece} {pos_to_coord(start)}"
         if captured != '.':
             move_text += f"x{captured} {pos_to_coord(end)}"
         else:
             move_text += f"-{pos_to_coord(end)}"
             
-        # Add move number for white moves
-        if len(self.board.move_log) % 2 == 1:  # White's move (1-indexed)
+        if len(self.board.move_log) % 2 == 1:
             move_number = (len(self.board.move_log) + 1) // 2
             move_text = f"{move_number}. {move_text}"
         
@@ -673,7 +659,7 @@ class ChessGUI:
         self.history_text.see(tk.END)
 
     def check_game_end(self):
-        """Check if the game has ended and show appropriate message."""
+        """Check if the game has ended."""
         if self.board.game_over:
             if self.board.winner == 'Draw':
                 messagebox.showinfo("Game Over", "It's a draw!")
