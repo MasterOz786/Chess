@@ -446,6 +446,16 @@ def pos_to_coord(pos):
     row, col = pos
     return f"{chr(97 + col)}{8 - row}"
 
+def coord_to_pos(coord):
+    """Convert chess coordinate to board position."""
+    if len(coord) < 2:
+        return None
+    col = ord(coord[0].lower()) - ord('a')
+    row = 8 - int(coord[1])
+    if 0 <= row < 8 and 0 <= col < 8:
+        return (row, col)
+    return None
+
 class ChessGUI:
     def __init__(self, root):
         self.root = root
@@ -666,10 +676,113 @@ class ChessGUI:
             else:
                 messagebox.showinfo("Game Over", f"{self.board.winner} wins!")
 
+class ChessCLI:
+    def __init__(self):
+        self.board = ChessBoard()
+        self.move_queue = Queue()
+
+    def print_board(self):
+        """Print the current board state."""
+        print("\n  a b c d e f g h")
+        for row in range(8):
+            print(f"{8 - row} ", end="")
+            for col in range(8):
+                piece = self.board.board[row][col]
+                print(piece if piece != '.' else '.', end=" ")
+            print(f"{8 - row}")
+        print("  a b c d e f g h\n")
+
+    def get_player_move(self):
+        """Get player's move input."""
+        while True:
+            try:
+                move = input("Enter move (e.g., e2e4) or 'quit' to exit: ").strip().lower()
+                if move == 'quit':
+                    return None
+                if len(move) != 4:
+                    print("Invalid format. Use algebraic notation (e.g., e2e4).")
+                    continue
+                
+                start = coord_to_pos(move[:2])
+                end = coord_to_pos(move[2:])
+                if start is None or end is None:
+                    print("Invalid coordinates. Try again.")
+                    continue
+                
+                move_tuple = (start, end)
+                if move_tuple in self.board.get_valid_moves():
+                    return move_tuple
+                else:
+                    print("Illegal move. Try again.")
+            except ValueError:
+                print("Invalid input. Try again.")
+
+    def compute_best_move(self):
+        """Compute AI's move in a separate thread."""
+        _, best_move = minimax(self.board, 3, float('-inf'), float('inf'), False)
+        self.move_queue.put(best_move)
+
+    def check_move_queue(self):
+        """Check if AI move is ready."""
+        try:
+            best_move = self.move_queue.get_nowait()
+            return best_move
+        except Empty:
+            return None
+
+    def make_computer_move(self):
+        """Start AI move computation and wait for result."""
+        if not self.board.game_over:
+            print("AI is thinking...")
+            threading.Thread(target=self.compute_best_move, daemon=True).start()
+            while True:
+                best_move = self.check_move_queue()
+                if best_move:
+                    self.board.make_move(best_move[0], best_move[1])
+                    print(f"AI move: {pos_to_coord(best_move[0])}{pos_to_coord(best_move[1])}")
+                    break
+                else:
+                    import time
+                    time.sleep(0.1)
+
+    def run(self):
+        """Run the CLI game loop."""
+        print("Welcome to Chess CLI!")
+        while not self.board.game_over:
+            self.print_board()
+            print("White's turn" if self.board.white_to_move else "Black's turn")
+            
+            if self.board.white_to_move:
+                move = self.get_player_move()
+                if move is None:
+                    print("Game ended by user.")
+                    break
+                self.board.make_move(move[0], move[1])
+            else:
+                self.make_computer_move()
+            
+            if self.board.game_over:
+                self.print_board()
+                if self.board.winner == 'Draw':
+                    print("Game Over: It's a draw!")
+                else:
+                    print(f"Game Over: {self.board.winner} wins!")
+                break
+
 def main():
-    root = tk.Tk()
-    chess_gui = ChessGUI(root)
-    root.mainloop()
+    """Main function to choose between GUI and CLI."""
+    print("Welcome to Chess!")
+    print("1. Play with GUI")
+    print("2. Play with CLI")
+    choice = input("Enter your choice (1 or 2): ").strip()
+    
+    if choice == '2':
+        cli = ChessCLI()
+        cli.run()
+    else:
+        root = tk.Tk()
+        gui = ChessGUI(root)
+        root.mainloop()
 
 if __name__ == "__main__":
     main()
